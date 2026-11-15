@@ -2377,12 +2377,16 @@ class App:
         except Exception:
             pass
 
-
 if __name__ == "__main__":
     if "--run-video" in sys.argv:
         sys.exit(run_video_pipeline())
     else:
         root = tk.Tk()
+        try:
+            os.makedirs(IN_FOLDER, exist_ok=True)
+            os.makedirs(OUT_FOLDER, exist_ok=True)
+        except Exception:
+            pass
         try:
             root.state("zoomed")
         except Exception:
