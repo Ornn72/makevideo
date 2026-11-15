@@ -1,4 +1,4 @@
-# 打包 pyinstaller --onefile --noconsole --name "makevideo" --icon "myicon.ico" --add-data "myicon.ico;." makevideo.py
+# 打包 pyinstaller --noconfirm --onedir --noconsole --name "makevideo" --icon "myicon.ico" --add-data "myicon.ico;." --collect-all moviepy --collect-all imageio --collect-all imageio_ffmpeg --add-data "C:\Users\benja\AppData\Local\Programs\Python\Python313\Lib\site-packages\imageio-2.38.1.dist-info;imageio-2.38.1.dist-info" --add-data "C:\Users\benja\AppData\Local\Programs\Python\Python313\Lib\site-packages\imageio_ffmpeg-0.6.0.dist-info;imageio_ffmpeg-0.6.0.dist-info" --add-data "C:\Users\benja\AppData\Local\Programs\Python\Python313\Lib\site-packages\moviepy-2.2.1.dist-info;moviepy-2.2.1.dist-info" makevideo.py
 import ctypes
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -11,7 +11,6 @@ except Exception:
 import sys
 import os
 import re
-import json
 import shutil
 import queue
 import threading
@@ -20,6 +19,7 @@ import datetime
 import traceback
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from tkinter.scrolledtext import ScrolledText
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
@@ -162,7 +162,11 @@ SUB_LINE_GAP = 8
 SUB_MAX_WIDTH_RATIO = 0.90
 SUB_BOTTOM_MARGIN = 130
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, "frozen", False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 IN_FOLDER = os.path.join(BASE_DIR, "input")
 TMP_CROP_FOLDER = os.path.join(BASE_DIR, "output", "_tmp_crop")
 OUT_FOLDER = os.path.join(BASE_DIR, "output")
@@ -580,6 +584,7 @@ class ScreenshotTool:
 
             self.root.deiconify()
             self.root.attributes("-topmost", True)
+            self.root.after(100, lambda: self.root.attributes("-topmost", False))
             self._show_toast(success=True)
             if self.on_saved:
                 try:
@@ -590,6 +595,7 @@ class ScreenshotTool:
             print("Screenshot failed:", repr(e))
             self.root.deiconify()
             self.root.attributes("-topmost", True)
+            self.root.after(100, lambda: self.root.attributes("-topmost", False))
             self._show_toast(success=False, text=str(e)[:60])
 
     def _show_toast(self, success=True, text=None):
@@ -667,6 +673,7 @@ class ScreenshotTool:
         try:
             self.root.deiconify()
             self.root.attributes("-topmost", True)
+            self.root.after(100, lambda: self.root.attributes("-topmost", False))
         except tk.TclError:
             pass
 
@@ -2024,6 +2031,10 @@ class App:
         self.root = root
         self.root.title("makevideo")
         try:
+            self.root.attributes("-topmost", False)
+        except Exception:
+            pass
+        try:
             base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
             ico = os.path.join(base, "myicon.ico")
             if os.path.exists(ico):
@@ -2089,9 +2100,21 @@ class App:
         self.status_label = tk.Label(self.tab2, text="Ready", font=("Arial", 10))
         self.status_label.pack(pady=5)
 
-        self.btn_open_output = tk.Button(self.tab2, text="打开 output 文件夹",
-                                         command=self.do_open_output, height=1, width=24)
-        self.btn_open_output.pack(pady=6)
+        folder_btns = tk.Frame(self.tab2)
+        folder_btns.pack(pady=6)
+        self.btn_open_input = tk.Button(folder_btns, text="打开 input 文件夹",
+                                        command=self.do_open_input, height=1, width=18)
+        self.btn_open_input.pack(side="left", padx=6)
+        self.btn_open_output = tk.Button(folder_btns, text="打开 output 文件夹",
+                                         command=self.do_open_output, height=1, width=18)
+        self.btn_open_output.pack(side="left", padx=6)
+
+        tk.Label(self.tab2, text="运行日志：", font=("Arial", 10)).pack(anchor="w", padx=10)
+        log_frame = tk.Frame(self.tab2)
+        log_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.log_text = ScrolledText(log_frame, height=12, wrap="word",
+                                     font=("Consolas", 9), state="disabled")
+        self.log_text.pack(fill="both", expand=True)
 
         self.shot_tool = ScreenshotTool(root)
 
@@ -2105,6 +2128,23 @@ class App:
         self._creep_timer = None
         self._creep_max = 0
         self._wait_count = 0
+
+    def _log(self, line):
+        try:
+            self.log_text.config(state="normal")
+            self.log_text.insert("end", line + "\n")
+            self.log_text.see("end")
+            self.log_text.config(state="disabled")
+        except Exception:
+            pass
+
+    def _log_clear(self):
+        try:
+            self.log_text.config(state="normal")
+            self.log_text.delete("1.0", "end")
+            self.log_text.config(state="disabled")
+        except Exception:
+            pass
 
     def do_start_shot(self):
         if not self.shot_tool.enabled:
@@ -2132,21 +2172,28 @@ class App:
             except Exception as e:
                 print(f"Delete failed {f}: {e}")
         self.shot_tool._show_toast(success=True, text=f"Deleted {deleted} image(s)")
+        self._log(f"已删除 {deleted} 张图片")
 
-    def do_open_output(self):
+    def _open_folder(self, folder):
         try:
-            os.makedirs(OUT_FOLDER, exist_ok=True)
+            os.makedirs(folder, exist_ok=True)
         except Exception:
             pass
         try:
             if sys.platform.startswith("win"):
-                os.startfile(OUT_FOLDER)
+                os.startfile(folder)
             elif sys.platform == "darwin":
-                subprocess.Popen(["open", OUT_FOLDER])
+                subprocess.Popen(["open", folder])
             else:
-                subprocess.Popen(["xdg-open", OUT_FOLDER])
+                subprocess.Popen(["xdg-open", folder])
         except Exception as e:
             self.status_label.config(text=f"Open failed: {e}")
+
+    def do_open_input(self):
+        self._open_folder(IN_FOLDER)
+
+    def do_open_output(self):
+        self._open_folder(OUT_FOLDER)
 
     def set_running(self, running):
         state = "disabled" if running else "normal"
@@ -2156,6 +2203,8 @@ class App:
         self.entry_outname.config(state=state)
         self.entry_title1.config(state=state)
         self.entry_title2.config(state=state)
+        self.btn_open_input.config(state=state)
+        self.btn_open_output.config(state=state)
         self.shot_tool.enabled = not running
         if not running:
             self._stop_creep()
@@ -2199,6 +2248,11 @@ class App:
         self.progress["value"] = 0
         self.status_label.config(text="Starting...")
         self.set_running(True)
+        self._log_clear()
+        self._log("=== 开始制作视频 ===")
+        self._log(f"input: {IN_FOLDER}")
+        self._log(f"output: {OUT_FOLDER}")
+        self._log("")
         self._wait_count = 0
 
         env = os.environ.copy()
@@ -2208,9 +2262,14 @@ class App:
         env[ENV_TITLE2] = self.entry_title2.get()
         env[ENV_OUTNAME] = self.entry_outname.get()
 
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--run-video"]
+        else:
+            cmd = [sys.executable, "-u", os.path.abspath(__file__), "--run-video"]
+
         try:
             self.proc = subprocess.Popen(
-                [sys.executable, "-u", os.path.abspath(__file__), "--run-video"],
+                cmd,
                 cwd=BASE_DIR,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -2224,6 +2283,7 @@ class App:
             self.proc = None
             self.set_running(False)
             self.status_label.config(text=f"Start failed: {e}")
+            self._log(f"Start failed: {e}")
             return
 
         def reader():
@@ -2262,6 +2322,7 @@ class App:
                     print(line)
                 except Exception:
                     pass
+                self._log(line)
                 self._update_progress_by_line(line)
         except queue.Empty:
             pass
@@ -2299,8 +2360,12 @@ class App:
             pct, text = 100, "完成"
         elif line.startswith("Error: no srt"):
             text = "input 里缺少同名 .srt 字幕"
-        elif ("Error" in line) or ("Fail" in line) or ("FATAL" in line) or ("Traceback" in line):
-            text = line[:80]
+        elif line.startswith("Error:"):
+            text = line
+        elif ("FATAL" in line) or ("Traceback" in line):
+            text = line[:120]
+        elif ("Error" in line) or ("Fail" in line):
+            text = line[:120]
 
         if pct is not None:
             self._stop_creep()
@@ -2327,8 +2392,13 @@ class App:
         if code == 0:
             self.progress["value"] = 100
             self.status_label.config(text="完成")
+            self._log("")
+            self._log("=== 完成 ===")
         else:
-            self.status_label.config(text=f"失败 (exit code {code})")
+            self.status_label.config(text=f"失败 (exit code {code})，详见下方日志")
+            self._log("")
+            self._log(f"=== 失败 (exit code {code}) ===")
+            self._log("请把以上日志内容发给开发者排查")
             self._maybe_show_srt_missing()
 
     def _maybe_show_srt_missing(self):
@@ -2376,6 +2446,7 @@ class App:
             self.root.destroy()
         except Exception:
             pass
+
 
 if __name__ == "__main__":
     if "--run-video" in sys.argv:
