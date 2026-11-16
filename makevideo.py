@@ -1,4 +1,4 @@
-# 打包 pyinstaller --noconfirm --onedir --noconsole --name "makevideo" --icon "myicon.ico" --add-data "myicon.ico;." --collect-all moviepy --collect-all imageio --collect-all imageio_ffmpeg --add-data "C:\Users\benja\AppData\Local\Programs\Python\Python313\Lib\site-packages\imageio-2.38.1.dist-info;imageio-2.38.1.dist-info" --add-data "C:\Users\benja\AppData\Local\Programs\Python\Python313\Lib\site-packages\imageio_ffmpeg-0.6.0.dist-info;imageio_ffmpeg-0.6.0.dist-info" --add-data "C:\Users\benja\AppData\Local\Programs\Python\Python313\Lib\site-packages\moviepy-2.2.1.dist-info;moviepy-2.2.1.dist-info" makevideo.py
+# 打包 pyinstaller --noconfirm --onedir --noconsole --name "makevideo" --icon "myicon.ico" --add-data "myicon.ico;." --collect-all moviepy --collect-all imageio --collect-all imageio_ffmpeg makevideo.py
 import ctypes
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -69,7 +69,7 @@ R = 录制
 P = 暂停
 I = 插入录制（需先点出光标）
 O = 导入 WAV（有光标插到光标处，否则接在末尾）
-S = 转字幕（选一个 WAV 文件，生成同名 SRT）
+S = 转字幕（选一个 WAV 文件，生成同名 SRT 和 TXT）
 E = 导出（固定导出到 input/）
 + / - = 缩放
 空格 = 从光标播放 / 停止
@@ -91,7 +91,8 @@ E = 导出（固定导出到 input/）
 - 插入录制：先在块内部点出光标，按钮变亮，点击后从光标处插入一段新录音；
   如果光标在某个块中间，该块会被切成前后两块，新块夹在中间。
 - 导入 WAV：点"导入 (O)"选一个 .wav 文件；有光标就插到光标处，否则接在末尾。
-- 转字幕：点"转字幕 (S)"，弹窗选一个 .wav 文件，识别后在同目录生成同名 .srt（已有则覆盖）。
+- 转字幕：点"转字幕 (S)"，弹窗选一个 .wav 文件，识别后在同目录生成同名 .srt 和 .txt（已有则覆盖）。
+  .srt 带时间轴，.txt 为纯文本字幕（一段一行，无时间轴）。
 - 点区块顶部灰色条：选中整块，按 Delete 删除整块
 - 点区块内部：放红色光标
 - 在区块内部按住拖：框选（橙色），按 Delete 删除选中范围
@@ -170,6 +171,7 @@ else:
 IN_FOLDER = os.path.join(BASE_DIR, "input")
 TMP_CROP_FOLDER = os.path.join(BASE_DIR, "output", "_tmp_crop")
 OUT_FOLDER = os.path.join(BASE_DIR, "output")
+WHISPER_MODEL = os.path.join(BASE_DIR, "models")
 
 SHOT_MODE = "ratio"
 SHOT_RATIO_W, SHOT_RATIO_H = 4, 3
@@ -282,6 +284,18 @@ def _write_srt(segments, out_path):
         lines.append(f"{_format_srt_time(seg['start'])} --> {_format_srt_time(seg['end'])}")
         lines.append(text)
         lines.append("")
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    return out_path
+
+
+def _write_txt(segments, out_path):
+    lines = []
+    for seg in segments:
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        lines.append(text)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
     return out_path
@@ -1699,6 +1713,7 @@ class Recorder:
         out_dir = os.path.dirname(os.path.abspath(path))
         base = os.path.splitext(os.path.basename(path))[0]
         srt_path = os.path.join(out_dir, base + ".srt")
+        txt_path = os.path.join(out_dir, base + ".txt")
 
         self._srt_busy = True
         self.btn_srt.config(state="disabled", text="转字幕中…")
@@ -1735,14 +1750,15 @@ class Recorder:
                     })
 
                 _write_srt(result, srt_path)
-                self.root.after(0, lambda: self._on_srt_done(srt_path, len(result), None))
+                _write_txt(result, txt_path)
+                self.root.after(0, lambda: self._on_srt_done(srt_path, txt_path, len(result), None))
             except Exception as e:
                 traceback.print_exc()
-                self.root.after(0, lambda: self._on_srt_done(srt_path, 0, e))
+                self.root.after(0, lambda: self._on_srt_done(srt_path, txt_path, 0, e))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_srt_done(self, srt_path, n_seg, err):
+    def _on_srt_done(self, srt_path, txt_path, n_seg, err):
         self._srt_busy = False
         self.btn_srt.config(state="normal", text="转字幕 (S)")
         if err is not None:
@@ -1752,8 +1768,8 @@ class Recorder:
             self.status.config(text=f"转字幕失败：{msg[:80]}")
             messagebox.showerror("转字幕失败", msg)
             return
-        self.status.config(text=f"字幕已生成：{os.path.basename(srt_path)}（{n_seg} 段）")
-        messagebox.showinfo("转字幕完成", f"已生成：\n{srt_path}\n\n共 {n_seg} 段字幕。")
+        self.status.config(text=f"字幕已生成：{os.path.basename(srt_path)} + .txt（{n_seg} 段）")
+        messagebox.showinfo("转字幕完成", f"已生成：\n{srt_path}\n{txt_path}\n\n共 {n_seg} 段字幕。")
 
     def _normalize_loudness(self, audio):
         if len(audio) == 0:
@@ -2062,20 +2078,20 @@ class App:
         self.entry_outname.insert(0, "")
         self.entry_outname.grid(row=0, column=1, padx=4, pady=3)
 
-        tk.Label(title_frame, text="事件:", font=("Arial", 10)).grid(
+        tk.Label(title_frame, text="视频内大标题上行:", font=("Arial", 10)).grid(
             row=1, column=0, sticky="e", padx=4, pady=3)
         self.entry_title1 = tk.Entry(title_frame, width=32, font=("Arial", 10))
         self.entry_title1.insert(0, TITLE1)
         self.entry_title1.grid(row=1, column=1, padx=4, pady=3)
 
-        tk.Label(title_frame, text="我想说的:", font=("Arial", 10)).grid(
+        tk.Label(title_frame, text="视频内大标题下行:", font=("Arial", 10)).grid(
             row=2, column=0, sticky="e", padx=4, pady=3)
         self.entry_title2 = tk.Entry(title_frame, width=32, font=("Arial", 10))
         self.entry_title2.insert(0, TITLE2)
         self.entry_title2.grid(row=2, column=1, padx=4, pady=3)
 
         tk.Label(self.tab2,
-                 text="(Title 留空 = 用音频同名；事件/我想说的 留空 = 不显示该行)",
+                 text="(Title 留空 = 用音频同名；视频内大标题 留空 = 不显示该行)",
                  fg="gray", font=("Arial", 9)).pack()
 
         tk.Label(self.tab2, text="需要 input/ 里有同名 .srt 字幕文件",
@@ -2086,8 +2102,8 @@ class App:
         self.btn_shot = tk.Button(row_btns, text="截图 (F1)", width=14, height=2,
                                   command=self.do_start_shot)
         self.btn_shot.pack(side="left", padx=6)
-        self.btn_clear = tk.Button(row_btns, text="清空 input 图片", width=14, height=2,
-                                   command=self.do_clear_images)
+        self.btn_clear = tk.Button(row_btns, text="清空 input+output", width=16, height=2,
+                                   command=self.do_clear_folders)
         self.btn_clear.pack(side="left", padx=6)
 
         self.btn_video = tk.Button(self.tab2, text="开始制作视频",
@@ -2151,28 +2167,43 @@ class App:
             return
         self.shot_tool.start_capture()
 
-    def do_clear_images(self):
-        if not os.path.isdir(IN_FOLDER):
-            self.shot_tool._show_toast(success=False, text="input folder not found")
-            return
-        imgs = [f for f in os.listdir(IN_FOLDER) if f.lower().endswith(IMAGE_EXTS)]
-        if not imgs:
-            self.shot_tool._show_toast(success=False, text="No images in input")
-            return
-        if not messagebox.askyesno(
-            "Confirm",
-            f"Delete {len(imgs)} image file(s) in input/ ?\n\nAudio files will NOT be touched."
-        ):
-            return
+    def _clear_folder_contents(self, folder):
         deleted = 0
-        for f in imgs:
+        failed = []
+        if not os.path.isdir(folder):
+            return deleted, failed
+        for name in os.listdir(folder):
+            p = os.path.join(folder, name)
             try:
-                os.remove(os.path.join(IN_FOLDER, f))
+                if os.path.isdir(p) and not os.path.islink(p):
+                    shutil.rmtree(p)
+                else:
+                    os.remove(p)
                 deleted += 1
             except Exception as e:
-                print(f"Delete failed {f}: {e}")
-        self.shot_tool._show_toast(success=True, text=f"Deleted {deleted} image(s)")
-        self._log(f"已删除 {deleted} 张图片")
+                failed.append((name, str(e)))
+        return deleted, failed
+
+    def do_clear_folders(self):
+        if not messagebox.askyesno(
+            "Confirm",
+            "将清空 input/ 和 output/ 里的所有内容（文件夹本身保留）。\n\n确定继续？"
+        ):
+            return
+        d1, f1 = self._clear_folder_contents(IN_FOLDER)
+        d2, f2 = self._clear_folder_contents(OUT_FOLDER)
+        deleted = d1 + d2
+        failed = f1 + f2
+        if failed:
+            msg = f"已删除 {deleted} 项，{len(failed)} 项删除失败：\n" + "\n".join(
+                f"{n}: {e}" for n, e in failed[:8]
+            )
+            self.shot_tool._show_toast(success=False, text=f"Deleted {deleted}, failed {len(failed)}")
+            messagebox.showwarning("部分删除失败", msg)
+            self._log(msg)
+        else:
+            self.shot_tool._show_toast(success=True, text=f"Cleared {deleted} item(s)")
+            self._log(f"已清空 input 和 output，共删除 {deleted} 项")
 
     def _open_folder(self, folder):
         try:
